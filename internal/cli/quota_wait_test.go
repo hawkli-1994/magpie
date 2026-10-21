@@ -43,6 +43,68 @@ func (f *fakeWait) wait() quotaWait {
 	}
 }
 
+// TestHeldBackAt covers every branch of heldBackAt (#1133).
+func TestHeldBackAt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("DSH_HOME", "")
+	jwt := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "h." + base64.RawURLEncoding.EncodeToString(b) + ".s"
+	}
+	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{
+		"id_token":      jwt(map[string]any{"email": "me@example.com"}),
+		"access_token":  jwt(map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
+		"refresh_token": "r", "account_id": "acct-1"}})
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), auth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	t.Cleanup(provider.ForgetAccounts)
+	if err := provider.SetAccountCap("codex", "me@example.com", 80); err != nil {
+		t.Fatal(err)
+	}
+	capOnly := t0.Add(20 * time.Minute)
+	usedUp := t0.Add(3 * time.Hour)
+	// cap alone: BackAt zero, CapBackAt set
+	qCap := codexAt("me@example.com", 85, capOnly)
+	if at := heldBackAt(qCap, t0); !at.Equal(capOnly) {
+		t.Fatalf("cap only: %v", at)
+	}
+	// used up at 100%, no cap hold before vendor reset
+	_ = provider.SetAccountCap("codex", "me@example.com", 0)
+	qFull := codexAt("me@example.com", 100, usedUp)
+	if at := heldBackAt(qFull, t0); !at.Equal(usedUp) {
+		t.Fatalf("used up: %v want %v", at, usedUp)
+	}
+	_ = provider.SetAccountCap("codex", "me@example.com", 80)
+	sooner, later := t0.Add(time.Hour), t0.Add(3*time.Hour)
+	// both: vendor 100% on weekly later; cap on five hours sooner
+	qBoth := provider.SubscriptionQuota{Provider: "codex", User: "me@example.com", Windows: []provider.QuotaWindow{
+		{Name: "5 hours", Used: 20, ResetsAt: &sooner},
+		{Name: "weekly", Used: 100, ResetsAt: &later},
+	}}
+	if at := heldBackAt(qBoth, t0); !at.Equal(later) {
+		t.Fatalf("BackAt later: %v want %v", at, later)
+	}
+	if err := provider.SetWindowCap("codex", "me@example.com", "weekly", 100); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.SetWindowCap("codex", "me@example.com", "weekly", 0) })
+	capSoon, fullLater := t0.Add(time.Hour), t0.Add(3*time.Hour)
+	qVendorLater := provider.SubscriptionQuota{Provider: "codex", User: "me@example.com", Windows: []provider.QuotaWindow{
+		{Name: "5 hours", Used: 90, ResetsAt: &capSoon},
+		{Name: "weekly", Used: 100, ResetsAt: &fullLater},
+	}}
+	if at := heldBackAt(qVendorLater, t0); !at.Equal(fullLater) {
+		t.Fatalf("BackAt after CapBackAt: %v want %v", at, fullLater)
+	}
+}
+
 func codexAt(user string, used float64, reset time.Time) provider.SubscriptionQuota {
 	r := reset
 	return provider.SubscriptionQuota{Provider: "codex", Name: "Codex", User: user, Windows: []provider.QuotaWindow{

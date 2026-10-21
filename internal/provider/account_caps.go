@@ -334,6 +334,45 @@ func capReached(q SubscriptionQuota, caps WindowCaps, now time.Time) bool {
 	return false
 }
 
+// CappedOut is whether q is held at the usage cap set on it at now (#1133).
+func CappedOut(q SubscriptionQuota, now time.Time) bool {
+	return capReached(q, AccountCapsOf(q.Provider, q.User), now)
+}
+
+// CapBackAt is when an account held at its usage cap has room again: when
+// the last of the windows that hold it at the cap renews. Zero when it is
+// not held at a cap, or when one of those windows doesn't say when it
+// renews.
+func CapBackAt(q SubscriptionQuota, now time.Time) time.Time {
+	caps := AccountCapsOf(q.Provider, q.User)
+	if !caps.Holds() {
+		return time.Time{}
+	}
+	var back time.Time
+	for _, w := range q.Windows {
+		share, _ := caps.Of(w.Name)
+		if share <= 0 || w.Aside || w.Model != "" || w.Used < float64(share) {
+			continue
+		}
+		if w.ResetsAt != nil && !w.ResetsAt.After(now) {
+			continue
+		}
+		var at time.Time
+		switch {
+		case w.ResetsAt != nil:
+			at = *w.ResetsAt
+		case w.ResetSecs > 0:
+			at = now.Add(time.Duration(w.ResetSecs) * time.Second)
+		default:
+			return time.Time{}
+		}
+		if at.After(back) {
+			back = at
+		}
+	}
+	return back
+}
+
 // WithCapped is m with Capped set on each window an account's usage cap
 // counts, for the GUI to mark the cap and say an account is held at it as
 // routing does — a window one model's own counts for that model, so it is

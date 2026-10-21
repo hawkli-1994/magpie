@@ -30,7 +30,7 @@ func accountsCmd(args []string) error {
 	if len(args) > 1 && args[1] == "discovery" {
 		return accountsDiscoveryCmd(args[2:])
 	}
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only codex [on|off]"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts cap <agent|<plugin>> [email [percent|off]] | magpie accounts cap <agent|<plugin>> <email> --window <name> [percent|none|default] | magpie accounts switch-only codex [on|off]"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -73,6 +73,24 @@ func accountsCmd(args []string) error {
 			fmt.Println(green.Render("✓"), args[3], "now uses Google Cloud project", args[4])
 		}
 		return nil
+	}
+	if len(args) > 1 && args[1] == "cap" {
+		if len(args) < 3 {
+			return fmt.Errorf("%s", usage)
+		}
+		id, err := agentID(args[2])
+		if err != nil {
+			return err
+		}
+		rest := args[3:]
+		if len(rest) > 0 {
+			user, err := accountNamed(id, rest[0])
+			if err != nil {
+				return err
+			}
+			rest[0] = user
+		}
+		return accountCapCmd(append([]string{id}, rest...))
 	}
 	if len(args) > 1 && args[1] == "alias" {
 		// a name of the user's own for an account (#1515): magpie's,
@@ -314,6 +332,9 @@ type accountRow struct {
 	// of the key plan whose card this account's stands in for (#1515).
 	Alias string `json:"alias,omitempty"`
 	Seat  string `json:"seat,omitempty"`
+	// UsageCap is the share (1–99) of each usage window routing stops at,
+	// 0 when the account has no cap (provider.AccountCaps).
+	UsageCap int `json:"usageCap,omitempty"`
 }
 
 type quotaSpan = provider.QuotaSpan
@@ -349,6 +370,7 @@ func accountRows(ls []provider.Login, now time.Time) []accountRow {
 		r := accountRow{Agent: l.Agent, User: l.User, Plan: l.Plan, Active: l.Active, On: l.On, Windows: []quotaSpan{}, Lapsed: l.Lapsed}
 		r.Seat = provider.SeatNameOf(l.Agent, l.User)
 		r.Alias = cmp.Or(provider.AccountNameOf(l.Agent, l.User), r.Seat)
+		r.UsageCap = provider.AccountCapOf(l.Agent, l.User)
 		for user, q := range usage[l.Agent] {
 			if !strings.EqualFold(user, l.User) {
 				continue

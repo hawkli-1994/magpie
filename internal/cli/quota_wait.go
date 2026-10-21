@@ -122,6 +122,28 @@ func readable(q provider.SubscriptionQuota) bool {
 	return q.Error == "" && q.AsOf == nil && len(q.Windows) > 0
 }
 
+// heldOut is whether an account has no allowance magpie would send to now:
+// used up at the vendor's 100%, or held at the usage cap set on it (#1133).
+func heldOut(q provider.SubscriptionQuota, now time.Time) bool {
+	return provider.UsedUp(q, now) || provider.CappedOut(q, now)
+}
+
+// heldBackAt is when heldOut stops holding the account: the last of the
+// windows that hold it at 100% or at its cap to renew.
+func heldBackAt(q provider.SubscriptionQuota, now time.Time) time.Time {
+	a, c := provider.BackAt(q, now), provider.CapBackAt(q, now)
+	switch {
+	case a.IsZero():
+		return c
+	case c.IsZero():
+		return a
+	case a.After(c):
+		return a
+	default:
+		return c
+	}
+}
+
 // run waits until an account of t is not used up, and returns it. The
 // error is errWaitTimeout once timeout (when over 0) has passed, or ctx's
 // once it is cancelled.
@@ -149,13 +171,13 @@ func (w quotaWait) run(ctx context.Context, t quotaTarget, timeout time.Duration
 				why = cmp.Or(why, q.Error)
 				continue
 			}
-			if !provider.UsedUp(q, now) {
+			if !heldOut(q, now) {
 				return q, nil
 			}
 			known++
 			// the soonest any account is back; one that doesn't say when
 			// leaves it to the next look
-			if at := provider.BackAt(q, now); !at.IsZero() && (back.IsZero() || at.Before(back)) {
+			if at := heldBackAt(q, now); !at.IsZero() && (back.IsZero() || at.Before(back)) {
 				back, backWho = at, q.User
 			}
 		}

@@ -97,6 +97,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts checkin         WorkBuddy's daily check-in (签到) for each WorkBuddy account, now (Settings can do it daily)
   magpie accounts project <gemini|antigravity> <email> <project>   the Google Cloud project a Google account's requests go to
   magpie accounts alias <agent> <email> [<name>|--clear]   a name of your own for an account, shown on its card, in the menu bar and in magpie quota
+  magpie accounts cap <agent> [email [percent|off]]   use a subscription account up to a share of each usage window (e.g. 80); at it, routing goes to your other accounts until the window renews
+  magpie accounts cap <agent> <email> --window <name> [percent|none|default]   a share for one window alone (e.g. "5 hours" 50): none is no cap on it, default follows the account's cap
   magpie accounts switch-only codex [on|off]   only switch Codex's own sign-in to an account with room; its requests go straight to OpenAI, never through magpie
   magpie claude-code [install [--yes]|remove]   the Claude Code a Claude subscription runs; install downloads Anthropic's own build, checked against its manifest, for a server or container without one
   magpie plugin [add <package>|rm|update|on|off|login <provider>|logout <provider>]

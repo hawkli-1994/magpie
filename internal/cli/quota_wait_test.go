@@ -2,7 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +54,47 @@ func codexAt(user string, used float64, reset time.Time) provider.SubscriptionQu
 }
 
 var t0 = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+
+// Every account held at its usage cap but under 100%: it waits until the
+// window renews, as for used up (#1133).
+func TestQuotaWaitAccountCap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("DSH_HOME", "")
+	jwt := func(m map[string]any) string {
+		b, _ := json.Marshal(m)
+		return "h." + base64.RawURLEncoding.EncodeToString(b) + ".s"
+	}
+	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{
+		"id_token":      jwt(map[string]any{"email": "me@example.com"}),
+		"access_token":  jwt(map[string]any{"exp": time.Now().Add(time.Hour).Unix()}),
+		"refresh_token": "r", "account_id": "acct-1"}})
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), auth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	t.Cleanup(provider.ForgetAccounts)
+	if err := provider.SetAccountCap("codex", "me@example.com", 80); err != nil {
+		t.Fatal(err)
+	}
+	reset := t0.Add(20 * time.Minute)
+	f := &fakeWait{now: t0}
+	f.at = func(now time.Time) []provider.SubscriptionQuota {
+		q := codexAt("me@example.com", 85, reset)
+		if !now.Before(reset) {
+			q = codexAt("me@example.com", 10, reset.Add(7*24*time.Hour))
+		}
+		return []provider.SubscriptionQuota{q}
+	}
+	q, err := f.wait().run(context.Background(), quotaTarget{provider: "codex", label: "codex"}, 0)
+	if err != nil || q.User != "me@example.com" || len(f.slept) == 0 {
+		t.Fatalf("got %q %v, slept %v", q.User, err, f.slept)
+	}
+}
 
 // An account with room: back at once, nothing slept.
 func TestQuotaWaitAlreadyAvailable(t *testing.T) {

@@ -72,6 +72,34 @@ func TestCapReached(t *testing.T) {
 	}
 }
 
+func TestCappedOutAndCapBackAt(t *testing.T) {
+	signIn(t)
+	if err := SetAccountCap("codex", "me@example.com", 80); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SetAccountCap("codex", "me@example.com", 0) })
+	now := time.Now()
+	five := now.Add(2 * time.Hour)
+	week := now.Add(4 * 24 * time.Hour)
+	q := SubscriptionQuota{Provider: "codex", User: "me@example.com", Windows: []QuotaWindow{
+		{Name: "5 hours", Used: 75, ResetsAt: &five},
+		{Name: "weekly", Used: 40, ResetsAt: &week},
+	}}
+	if CappedOut(q, now) {
+		t.Fatal("below cap")
+	}
+	q.Windows[0].Used = 85
+	if !CappedOut(q, now) {
+		t.Fatal("past cap")
+	}
+	if at := CapBackAt(q, now); !at.Equal(five) {
+		t.Fatalf("back %v want %v", at, five)
+	}
+	if !CapBackAt(SubscriptionQuota{Provider: "codex", User: "me@example.com", Windows: []QuotaWindow{{Name: "5 hours", Used: 90}}}, now).IsZero() {
+		t.Fatal("back without reset")
+	}
+}
+
 // WithCapped marks every window a cap counts, as CapHeld holds them: a
 // window one model's own counts for that model, so it is marked like the
 // rest — the GUI had nothing to show for an account held at its Opus
